@@ -1,1 +1,140 @@
+#include "stm32f4xx.h"
+#include <stdlib.h> // For rand()
 
+#define DELAY_COUNT 1000000
+
+volatile int button_pressed = -1; // To store which button was pressed
+
+void delay(uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        __asm("nop");
+    }
+}
+
+void setup_gpio(void) {
+    // Enable GPIOA and GPIOB clocks
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN;
+
+    // Configure PA2, PA3, PA4, PA5, PA6 as outputs (LEDs)
+    GPIOA->MODER |= (1 << (2 * 2)) | (1 << (3 * 2)) | (1 << (4 * 2)) |
+                    (1 << (5 * 2)) | (1 << (6 * 2));
+    GPIOA->OTYPER &= ~((1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6));
+
+    // Configure PB0, PB1, PB2, PB3 as inputs (Buttons)
+    GPIOB->MODER &= ~((3 << (0 * 2)) | (3 << (1 * 2)) | 
+                      (3 << (2 * 2)) | (3 << (3 * 2)));
+    GPIOB->PUPDR |= (1 << (0 * 2)) | (1 << (1 * 2)) | 
+                    (1 << (2 * 2)) | (1 << (3 * 2)); // Pull-up
+}
+
+void setup_interrupts(void) {
+    // Enable SYSCFG clock
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+
+    // Configure EXTI lines for PB0, PB1, PB2, PB3
+    SYSCFG->EXTICR[0] |= (SYSCFG_EXTICR1_EXTI0_PB |
+                           SYSCFG_EXTICR1_EXTI1_PB |
+                           SYSCFG_EXTICR1_EXTI2_PB |
+                           SYSCFG_EXTICR1_EXTI3_PB);
+
+    // Enable EXTI lines 0 to 3
+    EXTI->IMR |= EXTI_IMR_IM0 | EXTI_IMR_IM1 | EXTI_IMR_IM2 | EXTI_IMR_IM3;
+
+    // Configure falling edge trigger (active low buttons)
+    EXTI->FTSR |= EXTI_FTSR_TR0 | EXTI_FTSR_TR1 | EXTI_FTSR_TR2 | EXTI_FTSR_TR3;
+
+    // Enable NVIC interrupts for EXTI lines 0 to 3
+    NVIC_EnableIRQ(EXTI0_IRQn);
+    NVIC_EnableIRQ(EXTI1_IRQn);
+    NVIC_EnableIRQ(EXTI2_IRQn);
+    NVIC_EnableIRQ(EXTI3_IRQn);
+}
+
+void EXTI0_IRQHandler(void) {
+    if (EXTI->PR & EXTI_PR_PR0) {
+        button_pressed = 0;
+        EXTI->PR |= EXTI_PR_PR0; // Clear interrupt flag
+    }
+}
+
+void EXTI1_IRQHandler(void) {
+    if (EXTI->PR & EXTI_PR_PR1) {
+        button_pressed = 1;
+        EXTI->PR |= EXTI_PR_PR1; // Clear interrupt flag
+    }
+}
+
+void EXTI2_IRQHandler(void) {
+    if (EXTI->PR & EXTI_PR_PR2) {
+        button_pressed = 2;
+        EXTI->PR |= EXTI_PR_PR2; // Clear interrupt flag
+    }
+}
+
+void EXTI3_IRQHandler(void) {
+    if (EXTI->PR & EXTI_PR_PR3) {
+        button_pressed = 3;
+        EXTI->PR |= EXTI_PR_PR3; // Clear interrupt flag
+    }
+}
+
+void blink_startup_sequence(void) {
+    for (int i = 2; i <= 5; i++) {
+        GPIOA->BSRR = (1 << i); // Turn on LED (PA2 to PA5)
+        delay(DELAY_COUNT * 2); // 2-second delay for each LED
+        GPIOA->BSRR = (1 << (i + 16)); // Turn off LED
+    }
+}
+
+void light_led(uint8_t led_index) {
+    GPIOA->BSRR = (1 << led_index); // Turn on LED
+    delay(DELAY_COUNT);
+    GPIOA->BSRR = (1 << (led_index + 16)); // Turn off LED
+}
+
+void game_over(void) {
+    GPIOA->BSRR = (1 << 6); // Turn on LED 5
+    delay(DELAY_COUNT * 3);
+    GPIOA->BSRR = (1 << (6 + 16)); // Turn off LED 5
+
+    // Restart sequence: Blink LEDs 1 to 4 (PA2 to PA5) for 2 seconds each
+    blink_startup_sequence();
+}
+
+void wait_for_button_press(void) {
+    button_pressed = -1;               // Reset button state
+    while (button_pressed == -1);      // Wait until a button is pressed
+}
+
+int main(void) {
+    setup_gpio();
+    setup_interrupts();
+
+    __enable_irq(); // Enable global interrupts
+
+    while (1) {
+        blink_startup_sequence();
+
+        wait_for_button_press(); // Wait for a button press to start the game
+
+        uint8_t sequence[5];
+        for (int i = 0; i < 5; i++) {
+            sequence[i] = 2 + (rand() % 4); // Random sequence between PA2 and PA5
+        }
+
+        for (int round = 0; round < 5; round++) {
+            for (int i = 0; i <= round; i++) {
+                light_led(sequence[i]);
+                delay(DELAY_COUNT / 2);
+            }
+
+            for (int i = 0; i <= round; i++) {
+                wait_for_button_press();
+                if (button_pressed != (sequence[i] - 2)) {
+                    game_over();  // Wrong button pressed, end the game
+                    break;
+                }
+            }
+        }
+    }
+}
